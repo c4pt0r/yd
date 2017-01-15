@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
+
+	"github.com/chzyer/readline"
+	"github.com/ngaut/log"
 )
 
 const (
@@ -22,46 +24,94 @@ var (
 	verbose = flag.Bool("v", false, "verbose")
 )
 
-func main() {
-	flag.Parse()
-	word := strings.Join(flag.Args(), " ")
+func query(word string) (string, error) {
 	url := BaseUrl + url.QueryEscape(word)
 	if *verbose {
-		log.Println(word)
-		log.Println(url)
+		log.Info(word)
+		log.Info(url)
 	}
 
 	resp, err := http.Get(url)
 	if err != nil {
-		log.Fatal(err)
+		return "", err
 	}
 
 	b, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		log.Fatal(err)
+		return "", err
 	}
 
 	var v map[string]interface{}
 	if err := json.Unmarshal(b, &v); err != nil {
-		log.Fatal(err)
+		return "", err
 	}
 
 	if *verbose {
 		output, _ := json.MarshalIndent(v, "", "  ")
-		log.Println(string(output))
+		log.Info(string(output))
 	}
 
 	basic, ok := v["basic"]
 	if !ok {
-		os.Exit(0)
+		return "not found", nil
 	}
 
 	explains, ok := basic.(map[string]interface{})["explains"]
 	if !ok {
-		os.Exit(0)
+		return "not found", nil
 	}
 
+	var ret string
 	for _, e := range explains.([]interface{}) {
-		fmt.Println(e.(string))
+		ret += e.(string) + "\n"
+	}
+
+	return strings.TrimSpace(ret), nil
+}
+
+func interpreter() error {
+	l, err := readline.NewEx(&readline.Config{
+		Prompt:          ">> ",
+		InterruptPrompt: "^C",
+	})
+	if err != nil {
+		return err
+	}
+	defer l.Close()
+
+	for {
+		line, err := l.Readline()
+		if err == readline.ErrInterrupt {
+			if len(line) == 0 {
+				break
+			} else {
+				continue
+			}
+		} else if err == io.EOF {
+			break
+		}
+		line = strings.TrimSpace(line)
+		if ret, err := query(line); err == nil {
+			fmt.Println(ret)
+		} else {
+			return err
+		}
+	}
+	return nil
+}
+
+func main() {
+	flag.Parse()
+	word := strings.Join(flag.Args(), " ")
+	if len(word) > 0 {
+		explain, err := query(word)
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Println(explain)
+	} else {
+		if err := interpreter(); err != nil {
+			log.Fatal(err)
+		}
 	}
 }
