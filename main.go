@@ -91,6 +91,9 @@ func interpreter() error {
 			break
 		}
 		line = strings.TrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
 		if ret, err := query(line); err == nil {
 			fmt.Println(ret)
 		} else {
