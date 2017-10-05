@@ -62,6 +62,9 @@ func query(word string) (string, error) {
 	}
 
 	var ret string
+	if phonetic, ok := basic.(map[string]interface{})["phonetic"]; ok {
+		ret += "/" + phonetic.(string) + "/\n"
+	}
 	for _, e := range explains.([]interface{}) {
 		ret += e.(string) + "\n"
 	}
