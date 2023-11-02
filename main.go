@@ -3,73 +3,92 @@ package main
 // little CLI tool for query english(chinese) word/phrase, :)
 
 import (
-	"encoding/json"
+	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
-	"net/http"
-	"net/url"
+	"os"
 	"strings"
 
 	"github.com/chzyer/readline"
 	"github.com/ngaut/log"
-)
 
-const (
-	BaseUrl = "https://fanyi.youdao.com/openapi.do?keyfrom=c-dict&key=1416039712&type=data&doctype=json&version=1.1&q="
+	openai "github.com/sashabaranov/go-openai"
 )
 
 var (
-	verbose = flag.Bool("v", false, "verbose")
+	client *openai.Client
+
+	//langDetectPrompt = `What language is the following text? "%s", output should be in {"english", "chinese"}`
+	defaultPrompt = `如果下面引号内部的内容是英文，那么将下面的英文翻译成中文, 输出中文，并给出音标，英文例句和常用用法，尽可能详细: "%s"`
+	customPrompt  = flag.String("prompt", "", "custom prompt")
 )
 
-func query(word string) (string, error) {
-	url := BaseUrl + url.QueryEscape(word)
-	if *verbose {
-		log.Info(word)
-		log.Info(url)
-	}
+type Streamer interface {
+	// stop steaming by returning io.EOF, or other error
+	Recv() (string, error)
+	Close()
+}
 
-	resp, err := http.Get(url)
+type OpenAIStreamer struct {
+	s *openai.ChatCompletionStream
+}
+
+func NewOpenAIStreamer(s *openai.ChatCompletionStream) Streamer {
+	return &OpenAIStreamer{
+		s: s,
+	}
+}
+func (s *OpenAIStreamer) Recv() (string, error) {
+	r, err := s.s.Recv()
 	if err != nil {
 		return "", err
 	}
+	return r.Choices[0].Delta.Content, nil
+}
 
-	b, err := ioutil.ReadAll(resp.Body)
+func (s *OpenAIStreamer) Close() {
+	s.s.Close()
+}
+
+func init() {
+	// read openai token from environment variable
+	openaiToken := os.Getenv("OPENAI_API_KEY")
+	if openaiToken == "" {
+		log.Fatal("OPENAI_API_KEY not set")
+	}
+	client = openai.NewClient(openaiToken)
+}
+
+func query(word string) (Streamer, error) {
+	if client == nil {
+		panic("client is nil")
+	}
+	prompt := defaultPrompt
+	if *customPrompt != "" {
+		prompt = *customPrompt
+	}
+	fullPrompt := fmt.Sprintf(prompt, word)
+
+	ctx := context.Background()
+	req := openai.ChatCompletionRequest{
+		Model:     openai.GPT3Dot5Turbo,
+		MaxTokens: 3000,
+		Messages: []openai.ChatCompletionMessage{
+			{
+				Role:    openai.ChatMessageRoleUser,
+				Content: fullPrompt,
+			},
+		},
+		Stream: true,
+	}
+	stream, err := client.CreateChatCompletionStream(ctx, req)
 	if err != nil {
-		return "", err
+		fmt.Printf("ChatCompletionStream error: %v\n", err)
+		return nil, err
 	}
-
-	var v map[string]interface{}
-	if err := json.Unmarshal(b, &v); err != nil {
-		return "", err
-	}
-
-	if *verbose {
-		output, _ := json.MarshalIndent(v, "", "  ")
-		log.Info(string(output))
-	}
-
-	basic, ok := v["basic"]
-	if !ok {
-		return "not found", nil
-	}
-
-	explains, ok := basic.(map[string]interface{})["explains"]
-	if !ok {
-		return "not found", nil
-	}
-
-	var ret string
-	if phonetic, ok := basic.(map[string]interface{})["phonetic"]; ok {
-		ret += "/" + phonetic.(string) + "/\n"
-	}
-	for _, e := range explains.([]interface{}) {
-		ret += e.(string) + "\n"
-	}
-
-	return strings.TrimSpace(ret), nil
+	return NewOpenAIStreamer(stream), nil
 }
 
 func interpreter() error {
@@ -97,8 +116,18 @@ func interpreter() error {
 		if len(line) == 0 {
 			continue
 		}
-		if ret, err := query(line); err == nil {
-			fmt.Println(ret)
+		if stream, err := query(line); err == nil {
+			for {
+				response, err := stream.Recv()
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				if err != nil {
+					return err
+				}
+				fmt.Printf("%s", response)
+			}
+			fmt.Println()
 		} else {
 			return err
 		}
@@ -110,11 +139,21 @@ func main() {
 	flag.Parse()
 	word := strings.Join(flag.Args(), " ")
 	if len(word) > 0 {
-		explain, err := query(word)
+		stream, err := query(word)
 		if err != nil {
 			log.Fatal(err)
 		}
-		fmt.Println(explain)
+		for {
+			response, err := stream.Recv()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				log.Fatal(err)
+			}
+			fmt.Printf("%s", response)
+		}
+		fmt.Println()
 	} else {
 		if err := interpreter(); err != nil {
 			log.Fatal(err)
