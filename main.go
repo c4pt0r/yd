@@ -21,7 +21,7 @@ var (
 	client *openai.Client
 
 	//langDetectPrompt = `What language is the following text? "%s", output should be in {"english", "chinese"}`
-	defaultPrompt = `如果下面引号内部的内容是英文，那么将下面的英文翻译成中文, 输出中文，并给出音标，英文例句和常用用法，尽可能详细: "%s"`
+	defaultPrompt = `你是一个智能的翻译，如果下面引号内部的内容是英文，那么将下面的英文翻译成中文, 输出中文，并给出音标，英文例句和常用用法; 如果是中文，那么将内容翻译成英文, 不需要音标例句等内容；其他语种，直接翻译成中文即可，也不需要音标例句。要求尽可能详细: "%s"`
 	customPrompt  = flag.String("prompt", "", "custom prompt")
 )
 
@@ -73,7 +73,7 @@ func query(word string) (Streamer, error) {
 
 	ctx := context.Background()
 	req := openai.ChatCompletionRequest{
-		Model:     openai.GPT3Dot5Turbo,
+		Model:     "gpt-4o",
 		MaxTokens: 3000,
 		Messages: []openai.ChatCompletionMessage{
 			{
